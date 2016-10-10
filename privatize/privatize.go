@@ -1,45 +1,67 @@
 package main
 
 import(
-  "arithmetric.com/libzcash"
-  "bytes"
-  "encoding/json"
+  "github.com/arithmetric/zcashrpcclient"
+  "github.com/arithmetric/zcashrpcclient/zcashjson"
+  "github.com/btcsuite/btcutil"
+  "encoding/hex"
   "fmt"
   "log"
   "os"
 )
 
-const AmountFactor = 1000000000;
-const TxnFee = 0.0001;
+const TransactionFee = 0.0001
 
-/**
- *
- * 1. Send unspent to address
- *   - check `zcash-cli listunspent`
- *   - for each, run `zcash-cli z_sendmany` from unspent address to address argument
- *
- **/
 func main() {
   args := os.Args[1:]
+  if len(args) < 1 {
+    log.Fatal("Error: Argument required to specify destination address.\n")
+    return
+  }
   destination := args[0]
-  //TODO verify address as private
-  result := libzcash.Runner("listunspent")
-  items := result.([]interface{})
-  for i := 0; i < len(items); i++ {
-    item := items[i].(map[string]interface{})
-    txn_amount := float64(int(item["amount"].(float64) * AmountFactor) - int(TxnFee * AmountFactor)) / AmountFactor
-    txn := map[string]interface{}{"address": destination, "amount": txn_amount}
-    txns := []interface{}{txn}
-    txn_json, err := json.Marshal(txns)
-    if err != nil {
-  		log.Fatal(err)
-  	}
-    result := libzcash.Runner("z_sendmany", item["address"].(string), string(txn_json))
-    txn_id := result.(bytes.Buffer)
-    fmt.Printf("OK Transaction %s -- From %s (%fZTC) -- To %s (%fZTC)\n", txn_id.String(), item["address"], item["amount"], txn["address"], txn["amount"])
-	}
-}
+  fmt.Printf("privatize.go - Sending unspent transactions to %s\n\n", destination)
 
-//  libzcash.Runner("z_gettotalbalance", nil)
-//  libzcash.Runner("z_listaddresses", nil)
-//  libzcash.Runner("getinfo", nil)
+  // Connect to Zcash RPC server
+	connCfg := &zcashrpcclient.ConnConfig{
+    Host:         os.Getenv("ZCASH_RPC_HOST"),
+		User:         os.Getenv("ZCASH_RPC_USER"),
+		Pass:         os.Getenv("ZCASH_RPC_PASS"),
+		HTTPPostMode: true,
+		DisableTLS:   true,
+	}
+	client, err := zcashrpcclient.New(connCfg, nil)
+	if err != nil {
+		log.Fatal(err)
+    return
+	}
+	defer client.Shutdown()
+
+  // Get all unspent transparent transactions
+  unspent, err := client.ListUnspent()
+	if err != nil {
+		log.Fatal(err)
+    return
+	}
+  if len(unspent) < 1 {
+    fmt.Printf("No unspent transactions found.\n")
+    return
+  }
+  for _, utx := range(unspent) {
+    if utx.Confirmations > 0 {
+      utxamount, _ := btcutil.NewAmount(utx.Amount)
+      feeamount, _ := btcutil.NewAmount(TransactionFee)
+      txamount := utxamount - feeamount
+      memo := fmt.Sprintf("privatized from %s", utx.Address)
+      hexmemo := hex.EncodeToString([]byte(memo))
+      amount := zcashjson.ZSendManyEntry{Address: destination, Amount: txamount.ToBTC(), Memo: &hexmemo}
+      amounts := make([]zcashjson.ZSendManyEntry, 1)
+      amounts[0] = amount
+      result, err := client.ZSendMany(utx.Address, amounts)
+      if err != nil {
+    		log.Fatal(err)
+    	}
+      fmt.Printf("Sent %f from %s to %s (%s)\n", txamount.ToBTC(), utx.Address, destination, result)
+    }
+	}
+  fmt.Printf("\nFinished sending unspent transactions.\n")
+}

@@ -151,7 +151,7 @@ func main() {
       case "error":
         fallthrough
       case "failed":
-        fmt.Printf("Transaction failed: %s\n", statuses[0].Error["message"])
+        fmt.Printf("Transaction failed: %s\n", statuses[0].Error.Message)
         return
     }
     fmt.Printf("Waiting 15 seconds...\n")
